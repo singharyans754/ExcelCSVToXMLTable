@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Excel/CSV → AxTable XML Generator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
+  <style>
+    body { background: linear-gradient(135deg, #0f172a, #1e293b); font-family: 'Segoe UI', sans-serif; color: #e5e7eb; }
+    .glass { background: rgba(17, 25, 40, 0.85); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
+    .btn { transition: all 0.3s ease; }
+    .btn:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 8px 20px rgba(0,0,0,0.5); }
+    .drop-zone { transition: all 0.3s ease; }
+    .drop-zone.dragover { border-color: #60a5fa; background: rgba(30, 58, 138, 0.4); color: #60a5fa; transform: scale(1.02); }
+    textarea { font-family: monospace; }
+  </style>
+</head>
+<body class="p-6">
+  <div class="max-w-5xl mx-auto p-6 glass rounded-2xl shadow-2xl animate__animated animate__fadeInUp">
+    <h1 class="text-3xl font-bold text-center text-blue-400 mb-6 drop-shadow-lg">⚡ Excel/CSV → D365 AxTable XML Generator</h1>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      <!-- Left -->
+      <div>
+        <label class="block mb-3 font-semibold text-gray-300">Table Name</label>
+        <input id="tableName" type="text" placeholder="Enter table name"
+          class="w-full px-4 py-3 rounded-xl border border-gray-700 bg-gray-900 text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+
+        <button class="btn bg-blue-500 hover:bg-blue-400 text-white font-bold py-2 px-4 rounded-xl mt-4 mb-6" id="btnSample">
+          📥 Download Sample Excel
+        </button>
+        
+        <label class="block mb-3 font-semibold text-gray-300">Upload File</label>
+        <input id="excelFile" type="file" accept=".xlsx,.xls,.csv"
+          class="w-full px-3 py-2 rounded-xl border border-gray-700 bg-gray-900 text-gray-200"/>
+
+        <div id="dropZone" class="drop-zone mt-6 p-8 border-2 border-dashed border-gray-600 rounded-2xl text-center text-gray-400 cursor-pointer hover:border-blue-400">
+          📂 Drag & Drop Excel/CSV file here
+        </div>
+
+        <div class="flex mt-6">
+          <button class="btn bg-green-500 hover:bg-green-400 text-gray-900 font-bold py-3 px-6 rounded-xl" id="btnGen">
+            🚀 Generate XML
+          </button>
+          <button class="btn bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 px-6 rounded-xl ml-3 disabled:opacity-40 disabled:cursor-not-allowed" id="btnDownload" disabled>
+            ⬇️ Download
+          </button>
+        </div>
+      </div>
+
+      <!-- Right -->
+      <div>
+        <label class="block mb-3 font-semibold text-gray-300">Generated XML</label>
+        <textarea id="xmlOut" placeholder="Generated XML will appear here..."
+          readonly
+          class="w-full min-h-[400px] max-h-[500px] p-4 rounded-xl border border-gray-700 bg-gray-900 text-green-400 text-sm overflow-auto resize-y whitespace-pre"></textarea>
+        <p class="text-xs text-gray-400 mt-2">⚠️ Required headers: <b>Field name, Label, Data type, Edt, Enum, Primary</b></p>
+      </div>
+    </div>
+  </div>
+
+  <footer class="text-center mt-6 text-gray-400">
+    © Developed by <b>Er. Aryan Singh</b>
+  </footer>
+
+<script>
+const toXmlEsc = (s='') => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+const typeMap = {
+  'string':'AxTableFieldString',
+  'int':'AxTableFieldInt',
+  'real':'AxTableFieldReal',
+  'date':'AxTableFieldDate',
+  'utcdatetime':'AxTableFieldUtcDateTime',
+  'enum':'AxTableFieldEnum',
+  'guid':'AxTableFieldGuid'
+};
+
+const defaultEDT = {
+  'string':'String10',
+  'real':'Amount',
+  'date':'TransDate',
+  'utcdatetime':'UtcDateTime',
+  'enum':'NoYes',
+  'guid':'Guid'
+};
+
+async function readExcelOrCSV(file){
+  return new Promise((resolve,reject)=>{
+    const fr=new FileReader();
+    fr.onload=()=>{
+      try{
+        let rows=[];
+        if(file.name.endsWith(".csv")){
+          const wb=XLSX.read(fr.result,{type:'string'});
+          rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
+        } else {
+          const wb=XLSX.read(new Uint8Array(fr.result),{type:'array'});
+          rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
+        }
+        resolve(rows);
+      }catch(err){reject(err);}
+    };
+    fr.onerror=reject;
+    if(file.name.endsWith(".csv")) fr.readAsText(file); else fr.readAsArrayBuffer(file);
+  });
+}
+
+function makeFieldXml(row){
+  const name=row["Field name"]?.trim();
+  if(!name) return '';
+
+  let t=(row["DataType"]||'string').toString().trim().toLowerCase();
+  let iType=typeMap[t]||'AxTableFieldString';
+  let edt=row["Edt"]?.trim()||defaultEDT[t]||'String10';
+  const label=row["Label"]?.trim()||name;
+  const help=row["HelpText"]?.trim()||label;
+
+  if(t==='enum'){
+    let enumType=row["Enum"]?.trim()||'NoYes';
+    return `\t\t<AxTableField xmlns="" i:type="AxTableFieldEnum">\n`+
+           `\t\t\t<Name>${toXmlEsc(name)}</Name>\n`+
+           `\t\t\t<EnumType>${toXmlEsc(enumType)}</EnumType>\n`+
+           `\t\t\t<HelpText>${toXmlEsc(label)}</HelpText>\n`+
+           `\t\t\t<Label>${toXmlEsc(label)}</Label>\n`+
+           `\t\t</AxTableField>`;
+  }
+
+  return `\t\t<AxTableField xmlns="" i:type="${iType}">\n`+
+         `\t\t\t<Name>${toXmlEsc(name)}</Name>\n`+
+         `\t\t\t<ExtendedDataType>${toXmlEsc(edt)}</ExtendedDataType>\n`+
+         `\t\t\t<HelpText>${toXmlEsc(help)}</HelpText>\n`+
+         `\t\t\t<IgnoreEDTRelation>Yes</IgnoreEDTRelation>\n`+
+         `\t\t\t<Label>${toXmlEsc(label)}</Label>\n`+
+         `\t\t</AxTableField>`;
+}
+
+function buildXml(tableName,rows){
+  const fields=rows.filter(r=>r["Field name"]).map(makeFieldXml).join('\n');
+  const pkFields=rows.filter(r=>String(r["Primary"]).trim().toLowerCase()==='yes')
+    .map(r=>`\t\t\t\t<AxTableIndexField>\n\t\t\t\t\t<DataField>${toXmlEsc(r["Field name"])}</DataField>\n\t\t\t\t</AxTableIndexField>`)
+    .join('\n');
+  return `<?xml version="1.0" encoding="utf-8"?>\n<AxTable xmlns:i="http://www.w3.org/2001/XMLSchema-instance">\n\t<Name>${toXmlEsc(tableName)}</Name>\n\t<Fields>\n${fields}\n\t</Fields>\n\t<Indexes>\n\t\t<AxTableIndex>\n\t\t\t<Name>PrimaryIdx</Name>\n\t\t\t<AlternateKey>Yes</AlternateKey>\n\t\t\t<Fields>\n${pkFields}\n\t\t\t</Fields>\n\t\t</AxTableIndex>\n\t</Indexes>\n</AxTable>`;
+}
+
+let lastRows=[];
+excelFile.addEventListener('change',async e=>{
+  if(!e.target.files[0]) return;
+  lastRows=await readExcelOrCSV(e.target.files[0]);
+  alert(`✅ File loaded with ${lastRows.length} rows.`);
+});
+
+const dropZone=document.getElementById('dropZone');
+dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('dragover');});
+dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop',async e=>{
+  e.preventDefault();dropZone.classList.remove('dragover');
+  const file=e.dataTransfer.files[0]; if(!file) return;
+  lastRows=await readExcelOrCSV(file); alert(`✅ File loaded with ${lastRows.length} rows.`);
+});
+
+btnGen.addEventListener('click',()=>{
+  const name=tableName.value.trim();
+  if(!name){alert('⚠️ Enter table name');return;}
+  if(!lastRows.length){alert('⚠️ Upload or Drop file first');return;}
+  xmlOut.value=buildXml(name,lastRows); btnDownload.disabled=false;
+});
+
+btnDownload.addEventListener('click',()=>{
+  const name=tableName.value.trim()||'Table';
+  const blob=new Blob([xmlOut.value],{type:'application/xml'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url;a.download=`${name}.xml`;a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),3000);
+});
+
+// Sample Excel download
+btnSample.addEventListener('click',()=>{
+  const sample = [
+    { "Field name":"", "Label":"", "Data type":"", "Edt":"", "Enum":"", "Primary":"" }
+  ];
+  const ws = XLSX.utils.json_to_sheet(sample);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Sample");
+  XLSX.writeFile(wb, "Sample.xlsx");
+});
+</script>
+</body>
+</html>
